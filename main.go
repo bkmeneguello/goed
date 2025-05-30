@@ -448,6 +448,16 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.cursorY = e.offsetY
 			e.dirty = true // Mark as dirty to redraw
 		}
+	case tcell.KeyHome:
+		// Move cursor to the beginning of the line
+		e.cursorX = 0
+		e.dirty = true // Mark as dirty to redraw cursor position
+	case tcell.KeyEnd:
+		// Move cursor to the end of the line
+		if e.cursorY < len(e.lines) {
+			e.cursorX = len(e.lines[e.cursorY])
+		}
+		e.dirty = true // Mark as dirty to redraw cursor position
 	}
 	// Redraw only once after handling the event
 	e.draw()
