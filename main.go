@@ -360,10 +360,10 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 		} else if e.cursorY > 0 {
 			// Merge with previous line
 			prevLine := e.lines[e.cursorY-1]
+			e.cursorX = len(prevLine) // Set cursor position to the end of the previous line
 			e.lines[e.cursorY-1] = append(prevLine, e.lines[e.cursorY]...)
 			e.lines = slices.Delete(e.lines, e.cursorY, e.cursorY+1)
 			e.cursorY--
-			e.cursorX = len(e.lines[e.cursorY])
 			e.dirty = true                                               // Mark as dirty
 			e.highlightCache = make([]map[int]tcell.Style, len(e.lines)) // Reset cache
 		}
