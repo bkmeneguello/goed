@@ -411,6 +411,28 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			}
 		}
 		e.dirty = true // Mark as dirty to redraw cursor position
+	case tcell.KeyPgUp:
+		// Scroll up one page minus one row
+		_, h := e.screen.Size()
+		if e.offsetY > 0 {
+			e.offsetY -= h - 1
+			if e.offsetY < 0 {
+				e.offsetY = 0
+			}
+			e.cursorY = e.offsetY
+			e.dirty = true // Mark as dirty to redraw
+		}
+	case tcell.KeyPgDn:
+		// Scroll down one page minus one row
+		_, h := e.screen.Size()
+		if e.offsetY < len(e.lines)-1 {
+			e.offsetY += h - 1
+			if e.offsetY > len(e.lines)-1 {
+				e.offsetY = len(e.lines) - 1
+			}
+			e.cursorY = e.offsetY
+			e.dirty = true // Mark as dirty to redraw
+		}
 	}
 	// Redraw only once after handling the event
 	e.draw()
