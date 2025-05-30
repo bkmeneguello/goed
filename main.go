@@ -367,6 +367,21 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.dirty = true                                               // Mark as dirty
 			e.highlightCache = make([]map[int]tcell.Style, len(e.lines)) // Reset cache
 		}
+	case tcell.KeyDelete:
+		// Remove character at cursor or merge lines
+		if e.cursorY < len(e.lines) && e.cursorX < len(e.lines[e.cursorY]) {
+			line := e.lines[e.cursorY]
+			e.lines[e.cursorY] = slices.Delete(line, e.cursorX, e.cursorX+1)
+			e.dirty = true                    // Mark as dirty
+			e.highlightCache[e.cursorY] = nil // Invalidate cache for the modified line
+		} else if e.cursorY < len(e.lines)-1 {
+			// Merge with next line
+			nextLine := e.lines[e.cursorY+1]
+			e.lines[e.cursorY] = append(e.lines[e.cursorY], nextLine...)
+			e.lines = slices.Delete(e.lines, e.cursorY+1, e.cursorY+2)
+			e.dirty = true                                               // Mark as dirty
+			e.highlightCache = make([]map[int]tcell.Style, len(e.lines)) // Reset cache
+		}
 	case tcell.KeyEnter:
 		// Split line at cursor
 		if e.cursorY < len(e.lines) {
