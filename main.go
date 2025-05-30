@@ -191,8 +191,7 @@ func (e *Editor) draw() {
 		}
 		highlight := e.highlightCache[lineIndex]
 
-		x := 0
-		for i := e.offsetX; i < len(line) && x < w; {
+		for x, i := 0, e.offsetX; i < len(line) && x < w; x++ {
 			r, size := utf8.DecodeRuneInString(src[i:])
 			style, ok := highlight[i]
 			if !ok {
@@ -200,7 +199,6 @@ func (e *Editor) draw() {
 			}
 			e.screen.SetContent(x, y, r, nil, style)
 			i += size
-			x++
 		}
 	}
 
@@ -222,7 +220,6 @@ func (e *Editor) handleCommandMode(ev *tcell.EventKey) {
 		// Switch to insert mode
 		e.inCommandMode = false
 		e.dirty = true // Mark as dirty to trigger a redraw
-		e.draw()       // Redraw the screen to restore the cursor
 	case tcell.KeyRune:
 		if ev.Rune() == ':' {
 			e.handleCommandInput()
@@ -320,6 +317,7 @@ func (e *Editor) handleCommandInput() {
 		case *tcell.EventResize:
 			e.screen.Sync()
 			e.dirty = true
+			e.draw()
 			drawCmd()
 		}
 	}
