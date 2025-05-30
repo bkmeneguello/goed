@@ -192,7 +192,7 @@ func (e *Editor) draw() {
 		highlight := e.highlightCache[lineIndex]
 
 		x := 0
-		for i := 0; i < len(line) && x < w; {
+		for i := e.offsetX; i < len(line) && x < w; {
 			r, size := utf8.DecodeRuneInString(src[i:])
 			style, ok := highlight[i]
 			if !ok {
@@ -226,6 +226,7 @@ func (e *Editor) handleCommandMode(ev *tcell.EventKey) {
 	case tcell.KeyRune:
 		if ev.Rune() == ':' {
 			e.handleCommandInput()
+			e.dirty = true
 			e.inCommandMode = false
 		}
 	}
@@ -318,6 +319,7 @@ func (e *Editor) handleCommandInput() {
 			}
 		case *tcell.EventResize:
 			e.screen.Sync()
+			e.dirty = true
 			drawCmd()
 		}
 	}
@@ -477,8 +479,8 @@ func (e *Editor) adjustOffsets() {
 		e.offsetY = e.cursorY
 		e.dirty = true // Mark as dirty
 	} else if e.cursorY >= e.offsetY+h-1 {
-		e.offsetY = e.cursorY - h + 2 // -1 for status/cmd bar
-		e.dirty = true                // Mark as dirty
+		e.offsetY = e.cursorY - h + 1
+		e.dirty = true // Mark as dirty
 	}
 }
 
@@ -510,9 +512,6 @@ func main() {
 	for {
 		ev := editor.screen.PollEvent()
 
-		// Adjust horizontal and vertical offsets if cursor is out of visible area
-		editor.adjustOffsets()
-
 		switch ev := ev.(type) {
 		case *tcell.EventKey:
 			if editor.inCommandMode {
@@ -522,7 +521,13 @@ func main() {
 			}
 		case *tcell.EventResize:
 			editor.screen.Sync()
-			editor.draw()
+			editor.dirty = true // Mark as dirty to redraw on resize
 		}
+
+		// Adjust horizontal and vertical offsets if cursor is out of visible area
+		editor.adjustOffsets()
+
+		// Redraw the screen
+			editor.draw()
 	}
 }
