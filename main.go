@@ -13,6 +13,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+const (
+	defaultShowLineNumbers      = true
+	defaultHighlightCurrentLine = true
+)
+
 // Editor holds all state for the text editor.
 type Editor struct {
 	lines            [][]rune // Text buffer: each line is a slice of runes
@@ -36,6 +41,7 @@ type Editor struct {
 }
 
 // NewEditor initializes a new Editor instance.
+// It sets up the text buffer, syntax highlighter, and default settings.
 func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 	highlighter := NewSyntaxHighlighter(style)
 	return &Editor{
@@ -50,18 +56,19 @@ func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 		dirty:                true, // Initial state is dirty to trigger a full draw
 		highlighter:          highlighter,
 		cmd:                  []rune{}, // Initialize command buffer
-		showLineNumbers:      true,     // Show line numbers by default
-		highlightCurrentLine: true,     // Highlight current line by default
+		showLineNumbers:      defaultShowLineNumbers,
+		highlightCurrentLine: defaultHighlightCurrentLine,
 	}
 }
 
 // loadFile loads a file into the editor buffer (entire file in memory).
+// It clears the current buffer, reads the file line by line, and updates the syntax highlighter.
 func (e *Editor) loadFile(filename string) error {
 	filename = filepath.Clean(filename)
 
 	file, err := os.Open(filename)
 	if err != nil {
-		return fmt.Errorf("error opening file: %w", err)
+		return fmt.Errorf("error opening file '%s': %w", filename, err)
 	}
 	defer file.Close()
 
@@ -71,7 +78,7 @@ func (e *Editor) loadFile(filename string) error {
 		e.lines = append(e.lines, []rune(scanner.Text()))
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading file: %w", err)
+		return fmt.Errorf("error reading file '%s': %w", filename, err)
 	}
 	if len(e.lines) == 0 {
 		e.lines = [][]rune{{}}
@@ -87,6 +94,7 @@ func (e *Editor) loadFile(filename string) error {
 }
 
 // saveFile saves the buffer to a file (entire file in memory).
+// It writes each line of the buffer to the specified file.
 func (e *Editor) saveFile(filename string) {
 	filename = filepath.Clean(filename)
 
@@ -110,13 +118,15 @@ func (e *Editor) saveFile(filename string) {
 	e.showStatus("File saved: " + filename)
 }
 
-// showStatus updates the status message.
+// showStatus updates the status message displayed in the editor.
+// It marks the editor as dirty to trigger a redraw.
 func (e *Editor) showStatus(msg string) {
 	e.status = msg
 	e.dirty = true // Mark as dirty to trigger a redraw
 }
 
 // draw renders the buffer and cursor to the screen, with Go syntax highlighting using AST.
+// It handles line numbers, current line highlighting, and the status/command bar.
 func (e *Editor) draw() {
 	if !e.dirty {
 		return // Skip drawing if nothing has changed
@@ -125,7 +135,7 @@ func (e *Editor) draw() {
 	e.screen.Clear()
 	w, h := e.screen.Size()
 
-	// Calculate gutter width based on the largest line number
+	// Calculate gutter width once
 	gutterWidth := 0
 	if e.showLineNumbers {
 		gutterWidth = len(fmt.Sprintf("%d", len(e.lines)))
@@ -216,6 +226,7 @@ func (e *Editor) drawStatus() {
 }
 
 // handleCommandMode processes key events in command mode.
+// It handles switching to insert mode and processing ':' commands.
 func (e *Editor) handleCommandMode(ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyEsc:
@@ -234,6 +245,18 @@ func (e *Editor) drawCmd(cmd []rune) {
 	e.drawStatusBar(string(cmd))
 	_, h := e.screen.Size()
 	e.screen.ShowCursor(len(cmd), h-1)
+}
+
+// toggleShowLineNumbers toggles the display of line numbers.
+func (e *Editor) toggleShowLineNumbers() {
+	e.showLineNumbers = !e.showLineNumbers
+	e.dirty = true // Mark as dirty to trigger a redraw
+}
+
+// toggleHighlightCurrentLine toggles the highlighting of the current line.
+func (e *Editor) toggleHighlightCurrentLine() {
+	e.highlightCurrentLine = !e.highlightCurrentLine
+	e.dirty = true // Mark as dirty to trigger a redraw
 }
 
 // handleCommandInput handles the ':' command line at the bottom.
@@ -257,49 +280,19 @@ func (e *Editor) handleCommandInput() {
 				command := string(e.cmd)
 				switch {
 				case strings.HasPrefix(command, ":e "):
-					filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
-					if filename == "" {
-						e.showStatus("No filename specified for :e command")
-						break
-					}
-					e.currentFilename = filename
-					fallthrough
+					e.executeEditCommand(command)
 				case command == ":e":
-					// Reload current file
-					if e.currentFilename != "" {
-						if err := e.loadFile(e.currentFilename); err != nil {
-							e.showStatus("Error loading file: " + err.Error())
-						}
-					} else {
-						e.showStatus("No filename specified for :e command")
-					}
+					e.executeReloadCommand()
 				case strings.HasPrefix(command, ":w "):
-					// Save a copy
-					filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
-					if filename != "" {
-						e.saveFile(filename)
-					} else {
-						e.showStatus("No filename specified for :w command")
-					}
+					e.executeSaveAsCommand(command)
 				case command == ":w":
-					// Save current file
-					if e.currentFilename != "" {
-						e.saveFile(e.currentFilename)
-					} else {
-						e.showStatus("No filename specified for :w command")
-					}
+					e.executeSaveCommand()
 				case command == ":q":
-					// Quit editor
-					e.screen.Fini()
-					os.Exit(0)
+					e.executeQuitCommand()
 				case command == ":ln":
-					// Toggle line numbering
-					e.showLineNumbers = !e.showLineNumbers
-					e.dirty = true // Mark as dirty to trigger a redraw
+					e.toggleShowLineNumbers()
 				case command == ":hl":
-					// Toggle current line highlighting
-					e.highlightCurrentLine = !e.highlightCurrentLine
-					e.dirty = true // Mark as dirty to trigger a redraw
+					e.toggleHighlightCurrentLine()
 				default:
 					e.showStatus("Unknown command: " + command)
 				}
@@ -325,7 +318,52 @@ func (e *Editor) handleCommandInput() {
 	}
 }
 
+func (e *Editor) executeEditCommand(command string) {
+	filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
+	if filename == "" {
+		e.showStatus("No filename specified for :e command")
+		return
+	}
+	e.currentFilename = filename
+	if err := e.loadFile(e.currentFilename); err != nil {
+		e.showStatus("Error loading file: " + err.Error())
+	}
+}
+
+func (e *Editor) executeReloadCommand() {
+	if e.currentFilename != "" {
+		if err := e.loadFile(e.currentFilename); err != nil {
+			e.showStatus("Error loading file: " + err.Error())
+		}
+	} else {
+		e.showStatus("No filename specified for :e command")
+	}
+}
+
+func (e *Editor) executeSaveAsCommand(command string) {
+	filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
+	if filename != "" {
+		e.saveFile(filename)
+	} else {
+		e.showStatus("No filename specified for :w command")
+	}
+}
+
+func (e *Editor) executeSaveCommand() {
+	if e.currentFilename != "" {
+		e.saveFile(e.currentFilename)
+	} else {
+		e.showStatus("No filename specified for :w command")
+	}
+}
+
+func (e *Editor) executeQuitCommand() {
+	e.screen.Fini()
+	os.Exit(0)
+}
+
 // handleInsertMode processes key events in insert mode.
+// It handles character insertion, line splitting, and cursor movement.
 func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyEsc:
@@ -460,6 +498,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 }
 
 // adjustOffsets ensures the cursor is always visible in the viewport.
+// It adjusts the horizontal and vertical offsets based on the cursor position.
 func (e *Editor) adjustOffsets() {
 	w, h := e.screen.Size()
 
