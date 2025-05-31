@@ -439,7 +439,11 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			if e.offsetY > len(e.lines)-1 {
 				e.offsetY = len(e.lines) - 1
 			}
-			e.cursorY = e.offsetY
+			// Move cursor to the bottom of the screen
+			e.cursorY = e.offsetY + h - 1
+			if e.cursorY >= len(e.lines) {
+				e.cursorY = len(e.lines) - 1
+			}
 			e.dirty = true // Mark as dirty to redraw
 		}
 	case tcell.KeyHome:
