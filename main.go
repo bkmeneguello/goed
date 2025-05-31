@@ -29,23 +29,26 @@ type Editor struct {
 	cmd []rune // Command line input buffer
 
 	status string // Status message to display
+
+	showLineNumbers bool // True if line numbers should be displayed
 }
 
 // NewEditor initializes a new Editor instance.
 func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 	highlighter := NewSyntaxHighlighter(style)
 	return &Editor{
-		lines:         [][]rune{{}}, // Start with one empty line
-		cursorX:       0,
-		cursorY:       0,
-		offsetX:       0,
-		offsetY:       0,
-		inCommandMode: false, // Start in edit (insert) mode, not command mode
-		screen:        screen,
-		style:         style,
-		dirty:         true, // Initial state is dirty to trigger a full draw
-		highlighter:   highlighter,
-		cmd:           []rune{}, // Initialize command buffer
+		lines:           [][]rune{{}}, // Start with one empty line
+		cursorX:         0,
+		cursorY:         0,
+		offsetX:         0,
+		offsetY:         0,
+		inCommandMode:   false, // Start in edit (insert) mode, not command mode
+		screen:          screen,
+		style:           style,
+		dirty:           true, // Initial state is dirty to trigger a full draw
+		highlighter:     highlighter,
+		cmd:             []rune{}, // Initialize command buffer
+		showLineNumbers: true,
 	}
 }
 
@@ -119,6 +122,12 @@ func (e *Editor) draw() {
 	e.screen.Clear()
 	w, h := e.screen.Size()
 
+	// Calculate gutter width based on the largest line number
+	gutterWidth := 0
+	if e.showLineNumbers {
+		gutterWidth = len(fmt.Sprintf("%d", len(e.lines)))
+	}
+
 	// Draw visible lines
 	for y := 0; y < h && y+e.offsetY < len(e.lines); y++ {
 		// Reserve the last line for the status or command bar only if needed
@@ -131,7 +140,16 @@ func (e *Editor) draw() {
 		src := string(line)
 		highlightMap := e.highlighter.GetHighlightMap(src)
 
-		for x, i := 0, e.offsetX; i < len(line) && x < w; x++ {
+		if e.showLineNumbers {
+			// Draw line number gutter
+			lineNumber := fmt.Sprintf("%*d", gutterWidth, lineIndex+1)
+			for x, r := range lineNumber {
+				e.screen.SetContent(x, y, r, nil, e.style)
+			}
+		}
+
+		// Draw line content
+		for x, i := gutterWidth+1, e.offsetX; i < len(line) && x < w; x++ {
 			r, size := utf8.DecodeRuneInString(src[i:])
 			style := highlightMap[i]
 			e.screen.SetContent(x, y, r, nil, style)
@@ -147,7 +165,7 @@ func (e *Editor) draw() {
 	}
 
 	if !e.inCommandMode {
-		e.screen.ShowCursor(e.cursorX-e.offsetX, e.cursorY-e.offsetY)
+		e.screen.ShowCursor(e.cursorX-e.offsetX+gutterWidth+1, e.cursorY-e.offsetY)
 	}
 
 	e.screen.Show()
@@ -249,6 +267,10 @@ func (e *Editor) handleCommandInput() {
 					// Quit editor
 					e.screen.Fini()
 					os.Exit(0)
+				case command == ":ln":
+					// Toggle line numbering
+					e.showLineNumbers = !e.showLineNumbers
+					e.dirty = true // Mark as dirty to trigger a redraw
 				default:
 					e.showStatus("Unknown command: " + command)
 				}
