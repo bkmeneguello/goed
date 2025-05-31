@@ -3,7 +3,6 @@ module github.com/bkmeneguello/goide
 go 1.23.3
 
 require (
-	github.com/edsrzf/mmap-go v1.2.0
 	github.com/gdamore/tcell/v2 v2.8.1
 )
 

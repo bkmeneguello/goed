@@ -23,27 +23,26 @@ type Editor struct {
 	style            tcell.Style
 	dirty            bool // True if the buffer or viewport has changed
 
-	highlighter    *SyntaxHighlighter
-	highlightCache *HighlightCache
-	commandHandler *CommandHandler
+	highlighter *SyntaxHighlighter
+
+	cmd []rune // Command line input buffer
 }
 
 // NewEditor initializes a new Editor instance.
 func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 	highlighter := NewSyntaxHighlighter(style)
 	return &Editor{
-		lines:          [][]rune{{}}, // Start with one empty line
-		cursorX:        0,
-		cursorY:        0,
-		offsetX:        0,
-		offsetY:        0,
-		inCommandMode:  false, // Start in edit (insert) mode, not command mode
-		screen:         screen,
-		style:          style,
-		dirty:          true, // Initial state is dirty to trigger a full draw
-		highlighter:    highlighter,
-		highlightCache: NewHighlightCache(highlighter, 3),
-		commandHandler: NewCommandHandler(),
+		lines:         [][]rune{{}}, // Start with one empty line
+		cursorX:       0,
+		cursorY:       0,
+		offsetX:       0,
+		offsetY:       0,
+		inCommandMode: false, // Start in edit (insert) mode, not command mode
+		screen:        screen,
+		style:         style,
+		dirty:         true, // Initial state is dirty to trigger a full draw
+		highlighter:   highlighter,
+		cmd:           []rune{}, // Initialize command buffer
 	}
 }
 
@@ -71,9 +70,8 @@ func (e *Editor) loadFile(filename string) {
 	e.currentFilename = filename
 	e.dirty = true // Mark as dirty to trigger a redraw
 
-	// Update highlighter and cache
+	// Update highlighter
 	e.highlighter.SetFileExtension(filepath.Ext(filename))
-	e.highlightCache.Clear()
 }
 
 // saveFile saves the buffer to a file (entire file in memory).
@@ -122,9 +120,6 @@ func (e *Editor) draw() {
 	e.screen.Clear()
 	w, h := e.screen.Size()
 
-	// Update highlight cache for visible lines in batch
-	e.highlightCache.Update(e.offsetY, h, e.lines)
-
 	// Draw visible lines
 	for y := 0; y < h && y+e.offsetY < len(e.lines); y++ {
 		// Reserve the last line for the command bar only if in command mode
@@ -135,22 +130,18 @@ func (e *Editor) draw() {
 		lineIndex := y + e.offsetY
 		line := e.lines[lineIndex]
 		src := string(line)
-		highlight := e.highlightCache.Get(lineIndex)
+		highlightMap := e.highlighter.GetHighlightMap(src)
 
 		for x, i := 0, e.offsetX; i < len(line) && x < w; x++ {
 			r, size := utf8.DecodeRuneInString(src[i:])
-			style, ok := highlight[i]
-			if !ok {
-				style = e.style
-			}
+			style := highlightMap[i]
 			e.screen.SetContent(x, y, r, nil, style)
 			i += size
 		}
 	}
 
-	// Show cursor only in insert mode
 	if e.inCommandMode {
-		e.screen.ShowCursor(0, h-1)
+		e.drawCmd(e.cmd)
 	} else {
 		e.screen.ShowCursor(e.cursorX-e.offsetX, e.cursorY-e.offsetY)
 	}
@@ -169,31 +160,31 @@ func (e *Editor) handleCommandMode(ev *tcell.EventKey) {
 	case tcell.KeyRune:
 		if ev.Rune() == ':' {
 			e.handleCommandInput()
-			e.dirty = true
-			e.inCommandMode = false
 		}
 	}
 	// Redraw only once after handling the event
 	e.draw()
 }
 
+// drawCmd draws the command line at the bottom.
+func (e *Editor) drawCmd(cmd []rune) {
+	w, h := e.screen.Size()
+	for x := range w {
+		e.screen.SetContent(x, h-1, ' ', nil, e.style)
+	}
+	for x, ch := range cmd {
+		if x < w {
+			e.screen.SetContent(x, h-1, ch, nil, e.style)
+		}
+	}
+	e.screen.ShowCursor(len(cmd), h-1)
+}
+
 // handleCommandInput handles the ':' command line at the bottom.
 func (e *Editor) handleCommandInput() {
-	cmd := []rune{':'}
-	drawCmd := func() {
-		w, h := e.screen.Size()
-		for x := range w {
-			e.screen.SetContent(x, h-1, ' ', nil, e.style)
-		}
-		for x, ch := range cmd {
-			if x < w {
-				e.screen.SetContent(x, h-1, ch, nil, e.style)
-			}
-		}
-		e.screen.ShowCursor(len(cmd), h-1)
-		e.screen.Show()
-	}
-	drawCmd()
+	e.cmd = []rune{':'}
+	e.dirty = true
+	e.draw()
 	for inCmd := true; inCmd; {
 		ev := e.screen.PollEvent()
 		switch ev := ev.(type) {
@@ -201,13 +192,13 @@ func (e *Editor) handleCommandInput() {
 			switch ev.Key() {
 			case tcell.KeyEsc:
 				// Exit command input, redraw main buffer
-				cmd = []rune{}
+				e.cmd = []rune{}
 				inCmd = false
 				e.dirty = true
 				e.inCommandMode = false
 			case tcell.KeyEnter:
 				// Execute command
-				command := string(cmd)
+				command := string(e.cmd)
 				switch {
 				case strings.HasPrefix(command, ":e "):
 					filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
@@ -246,29 +237,27 @@ func (e *Editor) handleCommandInput() {
 				default:
 					e.showStatus("Unknown command: " + command)
 				}
-				cmd = []rune{}
+				e.cmd = []rune{}
 				inCmd = false
 				e.dirty = true
+				e.inCommandMode = false
 			case tcell.KeyBackspace, tcell.KeyBackspace2:
 				// Remove last character from command
-				if len(cmd) > 1 {
-					cmd = cmd[:len(cmd)-1]
+				if len(e.cmd) > 1 {
+					e.cmd = e.cmd[:len(e.cmd)-1]
+					e.dirty = true
 				}
-				drawCmd()
 			case tcell.KeyRune:
 				// Add character to command
-				cmd = append(cmd, ev.Rune())
-				drawCmd()
+				e.cmd = append(e.cmd, ev.Rune())
+				e.dirty = true
 			}
 		case *tcell.EventResize:
 			e.screen.Sync()
 			e.dirty = true
-			e.draw()
-			drawCmd()
 		}
+		e.draw()
 	}
-	// Redraw main buffer after exiting command input
-	e.draw()
 }
 
 // handleInsertMode processes key events in insert mode.
@@ -293,8 +282,6 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines[e.cursorY] = newLine
 			e.cursorX++
 			e.dirty = true // Mark as dirty
-			// Invalidate cache for the modified line
-			e.highlightCache.ClearLine(e.cursorY) // Clear specific line in cache
 		}
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		// Remove character before cursor or merge lines
@@ -303,8 +290,6 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines[e.cursorY] = slices.Delete(line, e.cursorX-1, e.cursorX)
 			e.cursorX--
 			e.dirty = true // Mark as dirty
-			// Invalidate cache for the modified line
-			e.highlightCache.ClearLine(e.cursorY) // Clear specific line in cache
 		} else if e.cursorY > 0 {
 			// Merge with previous line
 			prevLine := e.lines[e.cursorY-1]
@@ -312,8 +297,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines[e.cursorY-1] = append(prevLine, e.lines[e.cursorY]...)
 			e.lines = slices.Delete(e.lines, e.cursorY, e.cursorY+1)
 			e.cursorY--
-			e.dirty = true           // Mark as dirty
-			e.highlightCache.Clear() // Reset the cache using the Clear method
+			e.dirty = true // Mark as dirty
 		}
 	case tcell.KeyDelete:
 		// Remove character at cursor or merge lines
@@ -321,15 +305,12 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			line := e.lines[e.cursorY]
 			e.lines[e.cursorY] = slices.Delete(line, e.cursorX, e.cursorX+1)
 			e.dirty = true // Mark as dirty
-			// Invalidate cache for the modified line
-			e.highlightCache.ClearLine(e.cursorY) // Clear specific line in cache
 		} else if e.cursorY < len(e.lines)-1 {
 			// Merge with next line
 			nextLine := e.lines[e.cursorY+1]
 			e.lines[e.cursorY] = append(e.lines[e.cursorY], nextLine...)
 			e.lines = slices.Delete(e.lines, e.cursorY+1, e.cursorY+2)
-			e.dirty = true           // Mark as dirty
-			e.highlightCache.Clear() // Reset the cache using the Clear method
+			e.dirty = true // Mark as dirty
 		}
 	case tcell.KeyEnter:
 		// Split line at cursor
@@ -340,8 +321,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines = append(e.lines[:e.cursorY+1], append([][]rune{newLine}, e.lines[e.cursorY+1:]...)...)
 			e.cursorY++
 			e.cursorX = 0
-			e.dirty = true           // Mark as dirty
-			e.highlightCache.Clear() // Reset the cache using the Clear method
+			e.dirty = true // Mark as dirty
 		}
 	case tcell.KeyLeft:
 		if e.cursorX > 0 {
@@ -408,8 +388,6 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 		}
 		e.dirty = true // Mark as dirty to redraw cursor position
 	}
-	// Redraw only once after handling the event
-	e.draw()
 }
 
 // adjustOffsets ensures the cursor is always visible in the viewport.
@@ -433,9 +411,6 @@ func (e *Editor) adjustOffsets() {
 		e.offsetY = e.cursorY - h + 1
 		e.dirty = true
 	}
-
-	// Update highlight cache
-	e.highlightCache.Update(e.offsetY, h, e.lines)
 }
 
 func main() {
