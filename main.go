@@ -27,6 +27,8 @@ type Editor struct {
 	highlighter *SyntaxHighlighter
 
 	cmd []rune // Command line input buffer
+
+	status string // Status message to display
 }
 
 // NewEditor initializes a new Editor instance.
@@ -49,6 +51,8 @@ func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 
 // loadFile loads a file into the editor buffer (entire file in memory).
 func (e *Editor) loadFile(filename string) error {
+	filename = filepath.Clean(filename)
+
 	file, err := os.Open(filename)
 	if err != nil {
 		return fmt.Errorf("error opening file: %w", err)
@@ -78,6 +82,8 @@ func (e *Editor) loadFile(filename string) error {
 
 // saveFile saves the buffer to a file (entire file in memory).
 func (e *Editor) saveFile(filename string) {
+	filename = filepath.Clean(filename)
+
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
 	if err != nil {
 		e.showStatus("Error opening file: " + err.Error())
@@ -98,21 +104,10 @@ func (e *Editor) saveFile(filename string) {
 	e.showStatus("File saved: " + filename)
 }
 
-// showStatus displays a message in the status bar (bottom line).
+// showStatus updates the status message.
 func (e *Editor) showStatus(msg string) {
-	e.cmd = []rune{} // Clear command input when showing status
-
-	w, h := e.screen.Size()
-	for x := range w {
-		e.screen.SetContent(x, h-1, ' ', nil, e.style)
-	}
-	for x, ch := range msg {
-		if x < w {
-			e.screen.SetContent(x, h-1, ch, nil, e.style)
-		}
-	}
-	e.screen.HideCursor() // Ensure the cursor is hidden when showing the status
-	e.screen.Show()
+	e.status = msg
+	e.dirty = true // Mark as dirty to trigger a redraw
 }
 
 // draw renders the buffer and cursor to the screen, with Go syntax highlighting using AST.
@@ -126,8 +121,8 @@ func (e *Editor) draw() {
 
 	// Draw visible lines
 	for y := 0; y < h && y+e.offsetY < len(e.lines); y++ {
-		// Reserve the last line for the command bar only if in command mode
-		if e.inCommandMode && y == h-1 {
+		// Reserve the last line for the status or command bar only if needed
+		if (e.inCommandMode || e.status != "") && y == h-1 {
 			break
 		}
 
@@ -144,14 +139,37 @@ func (e *Editor) draw() {
 		}
 	}
 
+	// Draw status or command line
 	if e.inCommandMode {
 		e.drawCmd(e.cmd)
-	} else {
+	} else if e.status != "" {
+		e.drawStatus()
+	}
+
+	if !e.inCommandMode {
 		e.screen.ShowCursor(e.cursorX-e.offsetX, e.cursorY-e.offsetY)
 	}
 
 	e.screen.Show()
 	e.dirty = false // Reset dirty flag after drawing
+}
+
+func (e *Editor) drawStatusBar(content string) {
+	w, h := e.screen.Size()
+	for x := range w {
+		e.screen.SetContent(x, h-1, ' ', nil, e.style)
+	}
+	for x, ch := range content {
+		if x < w {
+			e.screen.SetContent(x, h-1, ch, nil, e.style)
+		}
+	}
+}
+
+// drawStatus draws the status message on the status bar.
+func (e *Editor) drawStatus() {
+	e.drawStatusBar(e.status)
+	e.status = "" // Clear status after drawing
 }
 
 // handleCommandMode processes key events in command mode.
@@ -170,15 +188,8 @@ func (e *Editor) handleCommandMode(ev *tcell.EventKey) {
 
 // drawCmd draws the command line at the bottom.
 func (e *Editor) drawCmd(cmd []rune) {
-	w, h := e.screen.Size()
-	for x := range w {
-		e.screen.SetContent(x, h-1, ' ', nil, e.style)
-	}
-	for x, ch := range cmd {
-		if x < w {
-			e.screen.SetContent(x, h-1, ch, nil, e.style)
-		}
-	}
+	e.drawStatusBar(string(cmd))
+	_, h := e.screen.Size()
 	e.screen.ShowCursor(len(cmd), h-1)
 }
 
@@ -186,8 +197,8 @@ func (e *Editor) drawCmd(cmd []rune) {
 func (e *Editor) handleCommandInput() {
 	e.cmd = []rune{':'}
 	e.dirty = true
-	e.draw()
 	for inCmd := true; inCmd; {
+		e.draw()
 		ev := e.screen.PollEvent()
 		switch ev := ev.(type) {
 		case *tcell.EventKey:
@@ -215,11 +226,9 @@ func (e *Editor) handleCommandInput() {
 					if e.currentFilename != "" {
 						if err := e.loadFile(e.currentFilename); err != nil {
 							e.showStatus("Error loading file: " + err.Error())
-							return
 						}
 					} else {
 						e.showStatus("No filename specified for :e command")
-						return
 					}
 				case strings.HasPrefix(command, ":w "):
 					// Save a copy
@@ -228,7 +237,6 @@ func (e *Editor) handleCommandInput() {
 						e.saveFile(filename)
 					} else {
 						e.showStatus("No filename specified for :w command")
-						return
 					}
 				case command == ":w":
 					// Save current file
@@ -236,7 +244,6 @@ func (e *Editor) handleCommandInput() {
 						e.saveFile(e.currentFilename)
 					} else {
 						e.showStatus("No filename specified for :w command")
-						return
 					}
 				case command == ":q":
 					// Quit editor
@@ -244,7 +251,6 @@ func (e *Editor) handleCommandInput() {
 					os.Exit(0)
 				default:
 					e.showStatus("Unknown command: " + command)
-					return
 				}
 				e.cmd = []rune{}
 				inCmd = false
@@ -265,7 +271,6 @@ func (e *Editor) handleCommandInput() {
 			e.screen.Sync()
 			e.dirty = true
 		}
-		e.draw()
 	}
 }
 
@@ -431,7 +436,8 @@ func main() {
 	if err := screen.Init(); err != nil {
 		log.Fatalf("Error initializing screen: %v", err)
 	}
-	defer screen.Fini()
+
+	defer screen.Fini() // Ensure cleanup is deferred
 
 	screen.Clear()
 	// Set default style: white foreground, black background
