@@ -31,24 +31,27 @@ type Editor struct {
 	status string // Status message to display
 
 	showLineNumbers bool // True if line numbers should be displayed
+
+	highlightCurrentLine bool // True if the current line should be highlighted
 }
 
 // NewEditor initializes a new Editor instance.
 func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 	highlighter := NewSyntaxHighlighter(style)
 	return &Editor{
-		lines:           [][]rune{{}}, // Start with one empty line
-		cursorX:         0,
-		cursorY:         0,
-		offsetX:         0,
-		offsetY:         0,
-		inCommandMode:   false, // Start in edit (insert) mode, not command mode
-		screen:          screen,
-		style:           style,
-		dirty:           true, // Initial state is dirty to trigger a full draw
-		highlighter:     highlighter,
-		cmd:             []rune{}, // Initialize command buffer
-		showLineNumbers: true,
+		lines:                [][]rune{{}}, // Start with one empty line
+		cursorX:              0,
+		cursorY:              0,
+		offsetX:              0,
+		offsetY:              0,
+		inCommandMode:        false, // Start in edit (insert) mode, not command mode
+		screen:               screen,
+		style:                style,
+		dirty:                true, // Initial state is dirty to trigger a full draw
+		highlighter:          highlighter,
+		cmd:                  []rune{}, // Initialize command buffer
+		showLineNumbers:      true,     // Show line numbers by default
+		highlightCurrentLine: true,     // Highlight current line by default
 	}
 }
 
@@ -142,17 +145,35 @@ func (e *Editor) draw() {
 
 		if e.showLineNumbers {
 			// Draw line number gutter
-			lineNumber := fmt.Sprintf("%*d", gutterWidth, lineIndex+1)
+			lineNumber := fmt.Sprintf("%*d ", gutterWidth, lineIndex+1)
 			for x, r := range lineNumber {
-				e.screen.SetContent(x, y, r, nil, e.style)
+				if e.highlightCurrentLine && lineIndex == e.cursorY {
+					e.screen.SetContent(x, y, r, nil, e.style.Background(tcell.Color18))
+				} else {
+					e.screen.SetContent(x, y, r, nil, e.style)
+				}
 			}
 		}
 
+		// Adjust starting position for content rendering
+		startX := 0
+		if e.showLineNumbers {
+			startX = gutterWidth + 1
+		}
+
 		// Draw line content
-		for x, i := gutterWidth+1, e.offsetX; i < len(line) && x < w; x++ {
-			r, size := utf8.DecodeRuneInString(src[i:])
+		for x, i := startX, e.offsetX; x < w; x++ {
+			r := ' ' // Default to space if no character is available
+			size := 1
+			if i < len(line) {
+				r, size = utf8.DecodeRuneInString(src[i:])
+			}
 			style := highlightMap[i]
-			e.screen.SetContent(x, y, r, nil, style)
+			if e.highlightCurrentLine && lineIndex == e.cursorY {
+				e.screen.SetContent(x, y, r, nil, style.Background(tcell.Color18))
+			} else {
+				e.screen.SetContent(x, y, r, nil, style)
+			}
 			i += size
 		}
 	}
@@ -165,7 +186,11 @@ func (e *Editor) draw() {
 	}
 
 	if !e.inCommandMode {
-		e.screen.ShowCursor(e.cursorX-e.offsetX+gutterWidth+1, e.cursorY-e.offsetY)
+		cursorX := e.cursorX - e.offsetX
+		if e.showLineNumbers {
+			cursorX += gutterWidth + 1
+		}
+		e.screen.ShowCursor(cursorX, e.cursorY-e.offsetY)
 	}
 
 	e.screen.Show()
@@ -270,6 +295,10 @@ func (e *Editor) handleCommandInput() {
 				case command == ":ln":
 					// Toggle line numbering
 					e.showLineNumbers = !e.showLineNumbers
+					e.dirty = true // Mark as dirty to trigger a redraw
+				case command == ":hl":
+					// Toggle current line highlighting
+					e.highlightCurrentLine = !e.highlightCurrentLine
 					e.dirty = true // Mark as dirty to trigger a redraw
 				default:
 					e.showStatus("Unknown command: " + command)
