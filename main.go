@@ -14,46 +14,37 @@ import (
 
 // Editor holds all state for the text editor.
 type Editor struct {
-	lines                 [][]rune                    // Text buffer: each line is a slice of runes
-	highlightCache        map[int]map[int]tcell.Style // Cached syntax highlighting for each line and rune
-	cursorX, cursorY      int                         // Cursor position in the buffer
-	offsetX, offsetY      int                         // Viewport offset for scrolling
-	currentFilename       string                      // Name of the currently loaded file
-	inCommandMode         bool                        // True if in command mode (like Vim)
-	screen                tcell.Screen                // tcell screen for terminal UI
-	style                 tcell.Style                 // Default style for text
-	dirty                 bool                        // True if the buffer or viewport has changed
-	highlighter           *SyntaxHighlighter          // Syntax highlighter for the editor
-	cacheRetentionPages   int
-	lastCacheUpdateOffset int
+	lines            [][]rune // Text buffer: each line is a slice of runes
+	cursorX, cursorY int      // Cursor position in the buffer
+	offsetX, offsetY int      // Viewport offset for scrolling
+	currentFilename  string   // Name of the currently loaded file
+	inCommandMode    bool     // True if in command mode (like Vim)
+	screen           tcell.Screen
+	style            tcell.Style
+	dirty            bool // True if the buffer or viewport has changed
+
+	highlighter    *SyntaxHighlighter
+	highlightCache *HighlightCache
+	commandHandler *CommandHandler
 }
 
 // NewEditor initializes a new Editor instance.
 func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
+	highlighter := NewSyntaxHighlighter(style)
 	return &Editor{
-		lines:                 [][]rune{{}}, // Start with one empty line
-		highlightCache:        map[int]map[int]tcell.Style{},
-		cursorX:               0,
-		cursorY:               0,
-		offsetX:               0,
-		offsetY:               0,
-		inCommandMode:         false, // Start in edit (insert) mode, not command mode
-		screen:                screen,
-		style:                 style,
-		dirty:                 true, // Initial state is dirty to trigger a full draw
-		highlighter:           NewSyntaxHighlighter(style),
-		cacheRetentionPages:   3,
-		lastCacheUpdateOffset: -1,
+		lines:          [][]rune{{}}, // Start with one empty line
+		cursorX:        0,
+		cursorY:        0,
+		offsetX:        0,
+		offsetY:        0,
+		inCommandMode:  false, // Start in edit (insert) mode, not command mode
+		screen:         screen,
+		style:          style,
+		dirty:          true, // Initial state is dirty to trigger a full draw
+		highlighter:    highlighter,
+		highlightCache: NewHighlightCache(highlighter, 3),
+		commandHandler: NewCommandHandler(),
 	}
-}
-
-// Add a method to update the highlighter's state when the file changes
-func (e *Editor) updateHighlighter() {
-	extension := ""
-	if e.currentFilename != "" {
-		extension = strings.ToLower(filepath.Ext(e.currentFilename))
-	}
-	e.highlighter.SetFileExtension(extension)
 }
 
 // loadFile loads a file into the editor buffer (entire file in memory).
@@ -78,11 +69,11 @@ func (e *Editor) loadFile(filename string) {
 	}
 	e.cursorX, e.cursorY = 0, 0 // Reset cursor
 	e.currentFilename = filename
-	e.dirty = true                                       // Mark as dirty to trigger a redraw
-	e.highlightCache = make(map[int]map[int]tcell.Style) // Reset cache
+	e.dirty = true // Mark as dirty to trigger a redraw
 
-	// Update the highlighter state
-	e.updateHighlighter()
+	// Update highlighter and cache
+	e.highlighter.SetFileExtension(filepath.Ext(filename))
+	e.highlightCache.Clear()
 }
 
 // saveFile saves the buffer to a file (entire file in memory).
@@ -131,6 +122,9 @@ func (e *Editor) draw() {
 	e.screen.Clear()
 	w, h := e.screen.Size()
 
+	// Update highlight cache for visible lines in batch
+	e.highlightCache.Update(e.offsetY, h, e.lines)
+
 	// Draw visible lines
 	for y := 0; y < h && y+e.offsetY < len(e.lines); y++ {
 		// Reserve the last line for the command bar only if in command mode
@@ -141,23 +135,16 @@ func (e *Editor) draw() {
 		lineIndex := y + e.offsetY
 		line := e.lines[lineIndex]
 		src := string(line)
+		highlight := e.highlightCache.Get(lineIndex)
 
-		// Update highlight cache if necessary
-		if lineIndex >= 0 && lineIndex < len(e.lines) { // Ensure lineIndex is within bounds of e.lines
-			if _, exists := e.highlightCache[lineIndex]; !exists {
-				e.highlightCache[lineIndex] = e.highlighter.GetHighlightMap(src)
+		for x, i := 0, e.offsetX; i < len(line) && x < w; x++ {
+			r, size := utf8.DecodeRuneInString(src[i:])
+			style, ok := highlight[i]
+			if !ok {
+				style = e.style
 			}
-			highlight := e.highlightCache[lineIndex]
-
-			for x, i := 0, e.offsetX; i < len(line) && x < w; x++ {
-				r, size := utf8.DecodeRuneInString(src[i:])
-				style, ok := highlight[i]
-				if !ok {
-					style = e.style
-				}
-				e.screen.SetContent(x, y, r, nil, style)
-				i += size
-			}
+			e.screen.SetContent(x, y, r, nil, style)
+			i += size
 		}
 	}
 
@@ -307,7 +294,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.cursorX++
 			e.dirty = true // Mark as dirty
 			// Invalidate cache for the modified line
-			delete(e.highlightCache, e.cursorY)
+			e.highlightCache.ClearLine(e.cursorY) // Clear specific line in cache
 		}
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		// Remove character before cursor or merge lines
@@ -317,7 +304,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.cursorX--
 			e.dirty = true // Mark as dirty
 			// Invalidate cache for the modified line
-			delete(e.highlightCache, e.cursorY)
+			e.highlightCache.ClearLine(e.cursorY) // Clear specific line in cache
 		} else if e.cursorY > 0 {
 			// Merge with previous line
 			prevLine := e.lines[e.cursorY-1]
@@ -325,8 +312,8 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines[e.cursorY-1] = append(prevLine, e.lines[e.cursorY]...)
 			e.lines = slices.Delete(e.lines, e.cursorY, e.cursorY+1)
 			e.cursorY--
-			e.dirty = true                                       // Mark as dirty
-			e.highlightCache = make(map[int]map[int]tcell.Style) // Reset cache
+			e.dirty = true           // Mark as dirty
+			e.highlightCache.Clear() // Reset the cache using the Clear method
 		}
 	case tcell.KeyDelete:
 		// Remove character at cursor or merge lines
@@ -335,14 +322,14 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines[e.cursorY] = slices.Delete(line, e.cursorX, e.cursorX+1)
 			e.dirty = true // Mark as dirty
 			// Invalidate cache for the modified line
-			delete(e.highlightCache, e.cursorY)
+			e.highlightCache.ClearLine(e.cursorY) // Clear specific line in cache
 		} else if e.cursorY < len(e.lines)-1 {
 			// Merge with next line
 			nextLine := e.lines[e.cursorY+1]
 			e.lines[e.cursorY] = append(e.lines[e.cursorY], nextLine...)
 			e.lines = slices.Delete(e.lines, e.cursorY+1, e.cursorY+2)
-			e.dirty = true                                       // Mark as dirty
-			e.highlightCache = make(map[int]map[int]tcell.Style) // Reset cache
+			e.dirty = true           // Mark as dirty
+			e.highlightCache.Clear() // Reset the cache using the Clear method
 		}
 	case tcell.KeyEnter:
 		// Split line at cursor
@@ -353,8 +340,8 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines = append(e.lines[:e.cursorY+1], append([][]rune{newLine}, e.lines[e.cursorY+1:]...)...)
 			e.cursorY++
 			e.cursorX = 0
-			e.dirty = true                                       // Mark as dirty
-			e.highlightCache = make(map[int]map[int]tcell.Style) // Reset cache
+			e.dirty = true           // Mark as dirty
+			e.highlightCache.Clear() // Reset the cache using the Clear method
 		}
 	case tcell.KeyLeft:
 		if e.cursorX > 0 {
@@ -432,76 +419,23 @@ func (e *Editor) adjustOffsets() {
 	// Ensure the cursor is visible horizontally
 	if e.cursorX < e.offsetX {
 		e.offsetX = e.cursorX
-		e.dirty = true // Mark as dirty
+		e.dirty = true
 	} else if e.cursorX >= e.offsetX+w {
 		e.offsetX = e.cursorX - w + 1
-		e.dirty = true // Mark as dirty
+		e.dirty = true
 	}
 
 	// Ensure the cursor is visible vertically
 	if e.cursorY < e.offsetY {
 		e.offsetY = e.cursorY
-		e.dirty = true // Mark as dirty
+		e.dirty = true
 	} else if e.cursorY >= e.offsetY+h-1 {
 		e.offsetY = e.cursorY - h + 1
-		e.dirty = true // Mark as dirty
+		e.dirty = true
 	}
 
-	// Only update highlight cache if scrolled at least one page
-	if e.shouldUpdateHighlightCache(h) {
-		e.clearHighlightCache(h)
-		e.warmUpHighlightCache(e.offsetY-h, e.offsetY+(2*h))
-	}
-}
-
-// shouldUpdateHighlightCache checks if the highlight cache needs to be updated
-func (e *Editor) shouldUpdateHighlightCache(h int) bool {
-	if e.lastCacheUpdateOffset == -1 ||
-		abs(e.offsetY-e.lastCacheUpdateOffset) >= h {
-		e.lastCacheUpdateOffset = e.offsetY
-		return true
-	}
-	return false
-}
-
-// abs returns the absolute value of an integer
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-func (e *Editor) clearHighlightCache(h int) {
-	start := e.offsetY - (e.cacheRetentionPages * h)
-	end := e.offsetY + (e.cacheRetentionPages * h)
-	if start < 0 {
-		start = 0
-	}
-	if end > len(e.lines) {
-		end = len(e.lines)
-	}
-
-	for lineIndex := range e.highlightCache {
-		if lineIndex < start || lineIndex >= end {
-			delete(e.highlightCache, lineIndex)
-		}
-	}
-}
-
-func (e *Editor) warmUpHighlightCache(start, end int) {
-	if start < 0 {
-		start = 0
-	}
-	if end > len(e.lines) {
-		end = len(e.lines)
-	}
-
-	for i := start; i < end; i++ {
-		if _, exists := e.highlightCache[i]; !exists {
-			e.highlightCache[i] = e.highlighter.GetHighlightMap(string(e.lines[i]))
-		}
-	}
+	// Update highlight cache
+	e.highlightCache.Update(e.offsetY, h, e.lines)
 }
 
 func main() {
