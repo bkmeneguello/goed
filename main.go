@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -47,11 +48,10 @@ func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 }
 
 // loadFile loads a file into the editor buffer (entire file in memory).
-func (e *Editor) loadFile(filename string) {
+func (e *Editor) loadFile(filename string) error {
 	file, err := os.Open(filename)
 	if err != nil {
-		e.showStatus("Error opening file: " + err.Error())
-		return
+		return fmt.Errorf("error opening file: %w", err)
 	}
 	defer file.Close()
 
@@ -61,7 +61,7 @@ func (e *Editor) loadFile(filename string) {
 		e.lines = append(e.lines, []rune(scanner.Text()))
 	}
 	if err := scanner.Err(); err != nil {
-		e.showStatus("Error reading file: " + err.Error())
+		return fmt.Errorf("error reading file: %w", err)
 	}
 	if len(e.lines) == 0 {
 		e.lines = [][]rune{{}}
@@ -72,6 +72,8 @@ func (e *Editor) loadFile(filename string) {
 
 	// Update highlighter
 	e.highlighter.SetFileExtension(filepath.Ext(filename))
+
+	return nil
 }
 
 // saveFile saves the buffer to a file (entire file in memory).
@@ -98,6 +100,8 @@ func (e *Editor) saveFile(filename string) {
 
 // showStatus displays a message in the status bar (bottom line).
 func (e *Editor) showStatus(msg string) {
+	e.cmd = []rune{} // Clear command input when showing status
+
 	w, h := e.screen.Size()
 	for x := range w {
 		e.screen.SetContent(x, h-1, ' ', nil, e.style)
@@ -162,8 +166,6 @@ func (e *Editor) handleCommandMode(ev *tcell.EventKey) {
 			e.handleCommandInput()
 		}
 	}
-	// Redraw only once after handling the event
-	e.draw()
 }
 
 // drawCmd draws the command line at the bottom.
@@ -211,24 +213,30 @@ func (e *Editor) handleCommandInput() {
 				case command == ":e":
 					// Reload current file
 					if e.currentFilename != "" {
-						e.loadFile(e.currentFilename)
+						if err := e.loadFile(e.currentFilename); err != nil {
+							e.showStatus("Error loading file: " + err.Error())
+							return
+						}
 					} else {
 						e.showStatus("No filename specified for :e command")
+						return
 					}
 				case strings.HasPrefix(command, ":w "):
 					// Save a copy
 					filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
-					if filename == "" {
+					if filename != "" {
+						e.saveFile(filename)
+					} else {
 						e.showStatus("No filename specified for :w command")
-						break
+						return
 					}
-					e.saveFile(filename)
 				case command == ":w":
 					// Save current file
 					if e.currentFilename != "" {
 						e.saveFile(e.currentFilename)
 					} else {
 						e.showStatus("No filename specified for :w command")
+						return
 					}
 				case command == ":q":
 					// Quit editor
@@ -236,6 +244,7 @@ func (e *Editor) handleCommandInput() {
 					os.Exit(0)
 				default:
 					e.showStatus("Unknown command: " + command)
+					return
 				}
 				e.cmd = []rune{}
 				inCmd = false
@@ -432,10 +441,14 @@ func main() {
 
 	// If a filename is provided as an argument, load it; otherwise, start with an empty buffer
 	if len(os.Args) > 1 {
-		editor.loadFile(os.Args[1])
+		if err := editor.loadFile(os.Args[1]); err != nil {
+			editor.showStatus("Error loading file: " + err.Error())
+		} else {
+			editor.draw()
+		}
+	} else {
+		editor.draw()
 	}
-
-	editor.draw()
 
 	// Main event loop
 	for {
