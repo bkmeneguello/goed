@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,6 @@ type Editor struct {
 	// Text buffer and cursor positions
 	lines            [][]rune // Text buffer: each line is a slice of runes
 	cursorX, cursorY int      // Cursor position in the buffer
-	cursorOffsetX    int      // Virtual cursor position considering tabs
 	offsetX, offsetY int      // Viewport offset for scrolling
 
 	// Screen and rendering
@@ -81,10 +81,10 @@ func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 // It adjusts the horizontal and vertical offsets based on the cursor position.
 func (e *Editor) adjustOffsets() {
 	// Ensure the cursor is visible horizontally
-	if cursorX := e.cursorX + e.cursorOffsetX; cursorX < e.offsetX {
+	if cursorX := e.cursorX; cursorX < e.offsetX {
 		e.offsetX = cursorX
 		e.dirty = true // Mark as dirty to trigger a redraw
-	} else if cursorX := e.cursorX + e.cursorOffsetX; cursorX >= e.offsetX+e.w {
+	} else if cursorX := e.cursorX; cursorX >= e.offsetX+e.w {
 		e.offsetX = cursorX - e.w + 1
 		e.dirty = true // Mark as dirty to trigger a redraw
 	}
@@ -176,7 +176,8 @@ func (e *Editor) draw() {
 	} else {
 		e.drawStatus()
 
-		cursorX := e.cursorX + e.cursorOffsetX - e.offsetX
+		cursorOffsetX := e.calculateCursorOffsetX(e.lines[e.cursorY])
+		cursorX := e.cursorX + cursorOffsetX - e.offsetX
 		if e.showLineNumbers {
 			cursorX += gutterWidth + 1
 		}
@@ -274,26 +275,13 @@ func (e *Editor) executeSaveCommand() {
 func (e *Editor) handleBackspace() {
 	if e.cursorY < len(e.lines) && e.cursorX > 0 {
 		line := e.lines[e.cursorY]
-		if line[e.cursorX-1] == '\t' {
-			// Remove the tab character
-			e.lines[e.cursorY] = slices.Delete(line, e.cursorX-1, e.cursorX)
-			e.cursorX--
-			e.cursorOffsetX -= e.spacesPerTab - 1 // Adjust virtual cursor position
-		} else {
-			e.lines[e.cursorY] = slices.Delete(line, e.cursorX-1, e.cursorX)
-			e.cursorX--
-		}
+		e.lines[e.cursorY] = slices.Delete(line, e.cursorX-1, e.cursorX)
+		e.cursorX--
 		e.dirty = true // Mark as dirty
 	} else if e.cursorY > 0 {
 		// Merge with previous line
 		prevLine := e.lines[e.cursorY-1]
 		e.cursorX = len(prevLine) // Set cursor position to the end of the previous line
-		e.cursorOffsetX = 0
-		for _, r := range prevLine {
-			if r == '\t' {
-				e.cursorOffsetX += e.spacesPerTab - 1
-			}
-		}
 		e.lines[e.cursorY-1] = append(prevLine, e.lines[e.cursorY]...)
 		e.lines = slices.Delete(e.lines, e.cursorY, e.cursorY+1)
 		e.cursorY--
@@ -304,8 +292,6 @@ func (e *Editor) handleBackspace() {
 // handleCommandInput handles the ':' command line at the bottom.
 // It processes user input and executes commands like :e, :w, and :q.
 func (e *Editor) handleCommandInput() {
-	e.cmd = []rune{':'}
-	e.dirty = true // Mark as dirty to trigger a redraw
 	for inCmd := true; inCmd; {
 		e.draw()
 		ev := e.screen.PollEvent()
@@ -316,33 +302,17 @@ func (e *Editor) handleCommandInput() {
 				// Exit command input, redraw main buffer
 				e.cmd = []rune{}
 				inCmd = false
-				e.dirty = true // Mark as dirty to trigger a redraw
 				e.inCommandMode = false
+				e.dirty = true // Mark as dirty to trigger a redraw
 			case tcell.KeyEnter:
 				// Execute command
-				command := string(e.cmd)
-				switch {
-				case strings.HasPrefix(command, ":e "):
-					e.executeEditCommand(command)
-				case command == ":e":
-					e.executeReloadCommand()
-				case strings.HasPrefix(command, ":w "):
-					e.executeSaveAsCommand(command)
-				case command == ":w":
-					e.executeSaveCommand()
-				case command == ":q":
-					e.executeQuitCommand()
-				case command == ":ln":
-					e.toggleShowLineNumbers()
-				case command == ":hl":
-					e.toggleHighlightCurrentLine()
-				default:
-					e.showStatus("Unknown command: " + command)
+				if err := e.executeCommand(string(e.cmd)); err != nil {
+					e.showStatus("Error: " + err.Error())
 				}
 				e.cmd = []rune{}
 				inCmd = false
-				e.dirty = true // Mark as dirty to trigger a redraw
 				e.inCommandMode = false
+				e.dirty = true // Mark as dirty to trigger a redraw
 			case tcell.KeyBackspace, tcell.KeyBackspace2:
 				// Remove last character from command
 				if len(e.cmd) > 1 {
@@ -360,6 +330,76 @@ func (e *Editor) handleCommandInput() {
 	}
 }
 
+func (e *Editor) executeCommand(command string) error {
+	i := 0
+	errUnknownCommand := errors.New("Unknown command: " + command)
+	if command[i] == ':' {
+		i++ // Skip the leading ':'
+		switch command[i] {
+		case 'e':
+			if i == len(command)-1 {
+				e.executeReloadCommand()
+				return nil
+			}
+			i++
+			switch command[i] {
+			case ' ':
+				e.executeEditCommand(command[i:])
+				return nil
+			default:
+				return errUnknownCommand
+			}
+		case 'w':
+			if i == len(command)-1 {
+				e.executeSaveCommand()
+				return nil
+			}
+			i++
+			switch command[i] {
+			case ' ':
+				e.executeSaveAsCommand(command[i:])
+				return nil
+			default:
+				return errUnknownCommand
+			}
+		case 'q':
+			if i == len(command)-1 {
+				e.executeQuitCommand()
+				return nil
+			} else {
+				return errUnknownCommand
+			}
+		case 'l':
+			if i == len(command)-1 {
+				return errUnknownCommand
+			}
+			i++
+			switch command[i] {
+			case 'n':
+				e.toggleShowLineNumbers()
+				return nil
+			default:
+				return errUnknownCommand
+			}
+		case 'h':
+			if i == len(command)-1 {
+				return errUnknownCommand
+			}
+			i++
+			switch command[i] {
+			case 'l':
+				e.toggleHighlightCurrentLine()
+				return nil
+			default:
+				return errUnknownCommand
+			}
+		default:
+			return errUnknownCommand
+		}
+	}
+	return errUnknownCommand
+}
+
 // handleCommandMode processes key events in command mode.
 // It handles switching to insert mode and processing ':' commands.
 // Parameters:
@@ -372,6 +412,8 @@ func (e *Editor) handleCommandMode(ev *tcell.EventKey) {
 		e.dirty = true // Mark as dirty to trigger a redraw
 	case tcell.KeyRune:
 		if ev.Rune() == ':' {
+			e.cmd = []rune{':'}
+			e.dirty = true // Mark as dirty to trigger a redraw
 			e.handleCommandInput()
 		}
 	}
@@ -403,7 +445,6 @@ func (e *Editor) handleEnter() {
 		e.lines = append(e.lines[:e.cursorY+1], append([][]rune{newLine}, e.lines[e.cursorY+1:]...)...)
 		e.cursorY++
 		e.cursorX = 0
-		e.cursorOffsetX = 0
 		e.dirty = true // Mark as dirty to redraw
 	}
 }
@@ -480,6 +521,20 @@ func (e *Editor) handleInsertRune(r rune) {
 	e.dirty = true // Mark as dirty
 }
 
+// calculateCursorOffsetX recalculates the virtual cursor offset based on tab widths.
+// Parameters:
+// - line: The line of text to calculate the offset for.
+// Returns: The recalculated cursor offset.
+func (e *Editor) calculateCursorOffsetX(line []rune) int {
+	offset := 0
+	for _, r := range line[:e.cursorX] {
+		if r == '\t' {
+			offset += e.spacesPerTab - 1
+		}
+	}
+	return offset
+}
+
 // handleMoveDown moves the cursor down by one line.
 // It adjusts the cursor position to the end of the line if necessary.
 func (e *Editor) handleMoveDown() {
@@ -490,12 +545,6 @@ func (e *Editor) handleMoveDown() {
 		if e.cursorX > 0 && (eol || e.cursorX > len(nextLine)) {
 			e.cursorX = len(nextLine)
 		}
-		e.cursorOffsetX = 0
-		for i := range e.cursorX {
-			if nextLine[i] == '\t' {
-				e.cursorOffsetX += e.spacesPerTab - 1
-			}
-		}
 	}
 	e.dirty = true // Mark as dirty to trigger a redraw
 }
@@ -504,21 +553,10 @@ func (e *Editor) handleMoveDown() {
 // If the cursor is at the beginning of the line, it moves to the end of the previous line.
 func (e *Editor) handleMoveLeft() {
 	if e.cursorX > 0 {
-		line := e.lines[e.cursorY]
-		if line[e.cursorX-1] == '\t' {
-			// Skip over the tab character
-			e.cursorOffsetX -= e.spacesPerTab - 1
-		}
 		e.cursorX--
 	} else if e.cursorY > 0 {
 		e.cursorY--
 		e.cursorX = len(e.lines[e.cursorY])
-		e.cursorOffsetX = 0
-		for i := range e.lines[e.cursorY] {
-			if e.lines[e.cursorY][i] == '\t' {
-				e.cursorOffsetX += e.spacesPerTab - 1
-			}
-		}
 	}
 	e.dirty = true // Mark as dirty to trigger a redraw
 }
@@ -527,16 +565,10 @@ func (e *Editor) handleMoveLeft() {
 // If the cursor is at the end of the line, it moves to the beginning of the next line.
 func (e *Editor) handleMoveRight() {
 	if e.cursorY < len(e.lines) && e.cursorX < len(e.lines[e.cursorY]) {
-		line := e.lines[e.cursorY]
-		if line[e.cursorX] == '\t' {
-			// Skip over the tab character
-			e.cursorOffsetX += e.spacesPerTab - 1
-		}
 		e.cursorX++
 	} else if e.cursorY < len(e.lines)-1 {
 		e.cursorY++
 		e.cursorX = 0
-		e.cursorOffsetX = 0
 	}
 	e.dirty = true // Mark as dirty to trigger a redraw
 }
@@ -546,12 +578,6 @@ func (e *Editor) handleMoveRight() {
 func (e *Editor) handleMoveToEnd() {
 	if e.cursorY < len(e.lines) {
 		e.cursorX = len(e.lines[e.cursorY])
-		e.cursorOffsetX = 0
-		for _, r := range e.lines[e.cursorY] {
-			if r == '\t' {
-				e.cursorOffsetX += e.spacesPerTab - 1
-			}
-		}
 	}
 	e.dirty = true // Mark as dirty to trigger a redraw
 }
@@ -559,7 +585,6 @@ func (e *Editor) handleMoveToEnd() {
 // handleMoveToStart moves the cursor to the beginning of the current line.
 func (e *Editor) handleMoveToStart() {
 	e.cursorX = 0
-	e.cursorOffsetX = 0
 	e.dirty = true // Mark as dirty to trigger a redraw
 }
 
@@ -572,12 +597,6 @@ func (e *Editor) handleMoveUp() {
 		prevLine := e.lines[e.cursorY]
 		if e.cursorX > 0 && (eol || e.cursorX > len(prevLine)) {
 			e.cursorX = len(prevLine)
-		}
-		e.cursorOffsetX = 0
-		for i := range e.cursorX {
-			if prevLine[i] == '\t' {
-				e.cursorOffsetX += e.spacesPerTab - 1
-			}
 		}
 	}
 	e.dirty = true // Mark as dirty to trigger a redraw
@@ -632,7 +651,6 @@ func (e *Editor) handleTab() {
 	newLine := append(line[:e.cursorX], append([]rune{'\t'}, line[e.cursorX:]...)...)
 	e.lines[e.cursorY] = newLine
 	e.cursorX++
-	e.cursorOffsetX += e.spacesPerTab - 1
 	e.dirty = true // Mark as dirty to trigger a redraw
 }
 
