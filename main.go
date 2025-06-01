@@ -467,6 +467,18 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines = slices.Delete(e.lines, e.cursorY+1, e.cursorY+2)
 			e.dirty = true // Mark as dirty
 		}
+	case tcell.KeyEnter:
+		// Split the current line at the cursor position
+		if e.cursorY < len(e.lines) {
+			line := e.lines[e.cursorY]
+			newLine := line[e.cursorX:]
+			e.lines[e.cursorY] = line[:e.cursorX]
+			e.lines = append(e.lines[:e.cursorY+1], append([][]rune{newLine}, e.lines[e.cursorY+1:]...)...)
+			e.cursorY++
+			e.cursorX = 0
+			e.virtualCursorX = 0
+			e.dirty = true // Mark as dirty to redraw
+		}
 	case tcell.KeyLeft:
 		if e.cursorX > 0 {
 			line := e.lines[e.cursorY]
