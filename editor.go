@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -223,8 +224,7 @@ func (e *Editor) executeEditCommand(command string) {
 		e.showStatus("No filename specified for :e command")
 		return
 	}
-	e.currentFilename = filename
-	if err := e.loadFile(e.currentFilename); err != nil {
+	if err := e.loadFile(filename); err != nil {
 		e.showStatus("Error loading file: " + err.Error())
 	}
 }
@@ -615,7 +615,7 @@ func (e *Editor) handlePageUp() {
 		if e.cursorX > len(e.lines[e.cursorY]) {
 			e.cursorX = len(e.lines[e.cursorY])
 		}
-		e.dirty = true // Mark as dirty to redraw
+		e.dirty = true // Mark as dirty to trigger a redraw
 	}
 }
 
@@ -643,7 +643,18 @@ func (e *Editor) handleTab() {
 // Returns:
 // - error: An error if the file cannot be opened or read.
 func (e *Editor) loadFile(filename string) error {
-	filename = filepath.Clean(filename)
+	// Parse line and column from filename
+	var line, col int
+	parts := strings.Split(filename, ":")
+	filename = filepath.Clean(parts[0])
+	if len(parts) > 1 {
+		line, _ = strconv.Atoi(parts[1])
+		line-- // Convert to zero-based index
+	}
+	if len(parts) > 2 {
+		col, _ = strconv.Atoi(parts[2])
+		col-- // Convert to zero-based index
+	}
 
 	file, err := os.Open(filename)
 	if err != nil {
@@ -663,11 +674,15 @@ func (e *Editor) loadFile(filename string) error {
 		e.lines = [][]rune{{}}
 	}
 	e.cursorX, e.cursorY = 0, 0 // Reset cursor
-	e.currentFilename = filename
-	e.dirty = true // Mark as dirty to trigger a redraw
-
+	if line >= 0 && line < len(e.lines) {
+		e.cursorY = line
+		if col >= 0 && col < len(e.lines[line]) {
+			e.cursorX = col
+		}
+	}
 	// Update highlighter
 	e.highlighter.SetFileExtension(filepath.Ext(filename))
+	e.currentFilename = filename
 
 	return nil
 }
