@@ -586,6 +586,25 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			}
 			e.dirty = true // Mark as dirty to redraw
 		}
+	case tcell.KeyHome:
+		// Move cursor to the beginning of the current line
+		e.cursorX = 0
+		e.virtualCursorX = 0
+		e.dirty = true // Mark as dirty to redraw
+	case tcell.KeyEnd:
+		// Move cursor to the end of the current line
+		if e.cursorY < len(e.lines) {
+			e.cursorX = len(e.lines[e.cursorY])
+			e.virtualCursorX = 0
+			for _, r := range e.lines[e.cursorY] {
+				if r == '\t' {
+					e.virtualCursorX += e.spacesPerTab
+				} else {
+					e.virtualCursorX++
+				}
+			}
+		}
+		e.dirty = true // Mark as dirty to redraw
 	}
 }
 
