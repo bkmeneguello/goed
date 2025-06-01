@@ -42,7 +42,7 @@ type Editor struct {
 	spacesPerTab int // Number of spaces to render for a tab character
 
 	// Add fields for actual and virtual cursor positions
-	virtualCursorX int // Virtual cursor position considering tabs
+	cursorOffsetX int // Virtual cursor position considering tabs
 }
 
 // NewEditor initializes a new Editor instance.
@@ -218,7 +218,7 @@ func (e *Editor) draw() {
 	}
 
 	if !e.inCommandMode {
-		cursorX := e.virtualCursorX - e.offsetX
+		cursorX := e.cursorX + e.cursorOffsetX - e.offsetX
 		if e.showLineNumbers {
 			cursorX += gutterWidth + 1
 		}
@@ -405,8 +405,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			newLine := append(line[:e.cursorX], append([]rune{r}, line[e.cursorX:]...)...)
 			e.lines[e.cursorY] = newLine
 			e.cursorX++
-			e.virtualCursorX++ // Adjust virtual cursor for other characters
-			e.dirty = true     // Mark as dirty
+			e.dirty = true // Mark as dirty
 		}
 	case tcell.KeyTab:
 		// Insert a tab character
@@ -419,8 +418,8 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 		}
 		newLine := append(line[:e.cursorX], append([]rune{'\t'}, line[e.cursorX:]...)...)
 		e.lines[e.cursorY] = newLine
-		e.cursorX += e.spacesPerTab
-		e.virtualCursorX += e.spacesPerTab
+		e.cursorX++
+		e.cursorOffsetX += e.spacesPerTab - 1
 		e.dirty = true // Mark as dirty
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		// Remove character before cursor or merge lines
@@ -430,23 +429,20 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 				// Remove the tab character
 				e.lines[e.cursorY] = slices.Delete(line, e.cursorX-1, e.cursorX)
 				e.cursorX--
-				e.virtualCursorX -= e.spacesPerTab // Adjust virtual cursor position
+				e.cursorOffsetX -= e.spacesPerTab - 1 // Adjust virtual cursor position
 			} else {
 				e.lines[e.cursorY] = slices.Delete(line, e.cursorX-1, e.cursorX)
 				e.cursorX--
-				e.virtualCursorX-- // Adjust virtual cursor position
 			}
 			e.dirty = true // Mark as dirty
 		} else if e.cursorY > 0 {
 			// Merge with previous line
 			prevLine := e.lines[e.cursorY-1]
 			e.cursorX = len(prevLine) // Set cursor position to the end of the previous line
-			e.virtualCursorX = 0
+			e.cursorOffsetX = 0
 			for _, r := range prevLine {
 				if r == '\t' {
-					e.virtualCursorX += e.spacesPerTab
-				} else {
-					e.virtualCursorX++
+					e.cursorOffsetX += e.spacesPerTab - 1
 				}
 			}
 			e.lines[e.cursorY-1] = append(prevLine, e.lines[e.cursorY]...)
@@ -476,7 +472,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			e.lines = append(e.lines[:e.cursorY+1], append([][]rune{newLine}, e.lines[e.cursorY+1:]...)...)
 			e.cursorY++
 			e.cursorX = 0
-			e.virtualCursorX = 0
+			e.cursorOffsetX = 0
 			e.dirty = true // Mark as dirty to redraw
 		}
 	case tcell.KeyLeft:
@@ -484,20 +480,16 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			line := e.lines[e.cursorY]
 			if line[e.cursorX-1] == '\t' {
 				// Skip over the tab character
-				e.virtualCursorX -= e.spacesPerTab
-			} else {
-				e.virtualCursorX--
+				e.cursorOffsetX -= e.spacesPerTab - 1
 			}
 			e.cursorX--
 		} else if e.cursorY > 0 {
 			e.cursorY--
 			e.cursorX = len(e.lines[e.cursorY])
-			e.virtualCursorX = 0
+			e.cursorOffsetX = 0
 			for i := range e.lines[e.cursorY] {
 				if e.lines[e.cursorY][i] == '\t' {
-					e.virtualCursorX += e.spacesPerTab
-				} else {
-					e.virtualCursorX++
+					e.cursorOffsetX += e.spacesPerTab - 1
 				}
 			}
 		}
@@ -507,15 +499,13 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			line := e.lines[e.cursorY]
 			if line[e.cursorX] == '\t' {
 				// Skip over the tab character
-				e.virtualCursorX += e.spacesPerTab
-			} else {
-				e.virtualCursorX++
+				e.cursorOffsetX += e.spacesPerTab - 1
 			}
 			e.cursorX++
 		} else if e.cursorY < len(e.lines)-1 {
 			e.cursorY++
 			e.cursorX = 0
-			e.virtualCursorX = 0
+			e.cursorOffsetX = 0
 		}
 		e.dirty = true // Mark as dirty to redraw cursor position
 	case tcell.KeyUp:
@@ -526,12 +516,10 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			if e.cursorX > 0 && (eol || e.cursorX > len(prevLine)) {
 				e.cursorX = len(prevLine)
 			}
-			e.virtualCursorX = 0
+			e.cursorOffsetX = 0
 			for i := range e.cursorX {
 				if prevLine[i] == '\t' {
-					e.virtualCursorX += e.spacesPerTab
-				} else {
-					e.virtualCursorX++
+					e.cursorOffsetX += e.spacesPerTab - 1
 				}
 			}
 		}
@@ -544,12 +532,10 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 			if e.cursorX > 0 && (eol || e.cursorX > len(nextLine)) {
 				e.cursorX = len(nextLine)
 			}
-			e.virtualCursorX = 0
+			e.cursorOffsetX = 0
 			for i := range e.cursorX {
 				if nextLine[i] == '\t' {
-					e.virtualCursorX += e.spacesPerTab
-				} else {
-					e.virtualCursorX++
+					e.cursorOffsetX += e.spacesPerTab - 1
 				}
 			}
 		}
@@ -589,18 +575,16 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 	case tcell.KeyHome:
 		// Move cursor to the beginning of the current line
 		e.cursorX = 0
-		e.virtualCursorX = 0
+		e.cursorOffsetX = 0
 		e.dirty = true // Mark as dirty to redraw
 	case tcell.KeyEnd:
 		// Move cursor to the end of the current line
 		if e.cursorY < len(e.lines) {
 			e.cursorX = len(e.lines[e.cursorY])
-			e.virtualCursorX = 0
+			e.cursorOffsetX = 0
 			for _, r := range e.lines[e.cursorY] {
 				if r == '\t' {
-					e.virtualCursorX += e.spacesPerTab
-				} else {
-					e.virtualCursorX++
+					e.cursorOffsetX += e.spacesPerTab - 1
 				}
 			}
 		}
@@ -614,11 +598,11 @@ func (e *Editor) adjustOffsets() {
 	w, h := e.screen.Size()
 
 	// Ensure the cursor is visible horizontally
-	if e.virtualCursorX < e.offsetX {
-		e.offsetX = e.virtualCursorX
+	if cursorX := e.cursorX + e.cursorOffsetX; cursorX < e.offsetX {
+		e.offsetX = cursorX
 		e.dirty = true
-	} else if e.virtualCursorX >= e.offsetX+w {
-		e.offsetX = e.virtualCursorX - w + 1
+	} else if cursorX := e.cursorX + e.cursorOffsetX; cursorX >= e.offsetX+w {
+		e.offsetX = cursorX - w + 1
 		e.dirty = true
 	}
 
