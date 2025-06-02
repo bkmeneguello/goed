@@ -470,7 +470,7 @@ func (e *Editor) handleInsertMode(ev *tcell.EventKey) {
 		}
 	case tcell.KeyTab:
 		// Insert a tab character
-		e.handleTab()
+		e.handleInsertRune('\t')
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		// Remove character before cursor or merge lines
 		e.handleBackspace()
@@ -636,22 +636,6 @@ func (e *Editor) handlePageUp() {
 		}
 		e.dirty = true // Mark as dirty to trigger a redraw
 	}
-}
-
-// handleTab inserts a tab character at the cursor position.
-// It adjusts the virtual cursor position to account for the tab width.
-func (e *Editor) handleTab() {
-	if e.cursorY >= len(e.lines) {
-		e.lines = append(e.lines, []rune{})
-	}
-	line := e.lines[e.cursorY]
-	if e.cursorX > len(line) {
-		e.cursorX = len(line)
-	}
-	newLine := append(line[:e.cursorX], append([]rune{'\t'}, line[e.cursorX:]...)...)
-	e.lines[e.cursorY] = newLine
-	e.cursorX++
-	e.dirty = true // Mark as dirty to trigger a redraw
 }
 
 // loadFile loads a file into the editor buffer (entire file in memory).
