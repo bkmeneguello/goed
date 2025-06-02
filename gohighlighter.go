@@ -37,11 +37,12 @@ func NewGoHighlighter(baseStyle tcell.Style) *GoHighlighter {
 }
 
 // GetHighlightMap returns a map of rune positions to styles for a given Go source line.
-func (gh *GoHighlighter) GetHighlightMap(src string) map[int]tcell.Style {
+func (gh *GoHighlighter) GetHighlightMap(src []rune) map[int]tcell.Style {
 	fset := token.NewFileSet()
 	var s scanner.Scanner
-	file := fset.AddFile("", fset.Base(), len(src))
-	s.Init(file, []byte(src), nil, scanner.ScanComments)
+	srcBytes := gh.runesToBytes(src) // Convert []rune to []byte efficiently
+	file := fset.AddFile("", fset.Base(), len(srcBytes))
+	s.Init(file, srcBytes, nil, scanner.ScanComments)
 
 	highlight := map[int]tcell.Style{}
 
@@ -52,10 +53,10 @@ func (gh *GoHighlighter) GetHighlightMap(src string) map[int]tcell.Style {
 		}
 		start := file.Offset(posn)
 		end := start
-		if lit != "" {
-			end += len(lit)
-		} else {
+		if lit == "" {
 			end += len(tok.String())
+		} else {
+			end += len(lit)
 		}
 
 		// Determine style based on token type
@@ -70,14 +71,22 @@ func (gh *GoHighlighter) GetHighlightMap(src string) map[int]tcell.Style {
 			style = gh.keywordStyle
 		}
 
-		for i := start; i < end; {
-			_, size := utf8.DecodeRuneInString(src[i:])
-			if size <= 0 {
-				break
-			}
+		for i := start; i < end; i++ {
 			highlight[i] = style
-			i += size
 		}
 	}
 	return highlight
+}
+
+func (gh *GoHighlighter) runesToBytes(src []rune) []byte {
+	// Allocate enough space: max 4 bytes per rune
+	buf := make([]byte, 0, len(src)*utf8.UTFMax)
+
+	for _, r := range src {
+		var tmp [utf8.UTFMax]byte
+		n := utf8.EncodeRune(tmp[:], r)
+		buf = append(buf, tmp[:n]...)
+	}
+
+	return buf
 }

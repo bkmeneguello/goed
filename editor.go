@@ -17,6 +17,16 @@ const (
 	defaultShowLineNumbers      = true
 	defaultHighlightCurrentLine = true
 	defaultSpacesPerTab         = 4
+
+	// Error messages
+	errorNoFilename     = "No filename specified"
+	errorUnknownCommand = "Unknown command"
+	errorOpeningFile    = "Error opening file"
+	errorWritingFile    = "Error writing to file"
+	errorReadingFile    = "Error reading file"
+
+	// Command parsing
+	minCommandLength = 2 // Minimum length for a valid command (e.g., ":q")
 )
 
 // Editor holds all state for the text editor.
@@ -124,7 +134,7 @@ func (e *Editor) draw() {
 
 		lineIndex := y + e.offsetY
 		line := e.lines[lineIndex]
-		highlightMap := e.highlighter.GetHighlightMap(string(line))
+		highlightMap := e.highlighter.GetHighlightMap(line)
 
 		if e.showLineNumbers {
 			// Draw line number gutter
@@ -222,11 +232,11 @@ func (e *Editor) drawStatusBar(content string) {
 func (e *Editor) executeEditCommand(command string) {
 	filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
 	if filename == "" {
-		e.showStatus("No filename specified for :e command")
+		e.showStatus(errorNoFilename + " for :e command")
 		return
 	}
 	if err := e.loadFile(filename); err != nil {
-		e.showStatus("Error loading file: " + err.Error())
+		e.showStatus(fmt.Sprintf("%s: %v", errorOpeningFile, err))
 	}
 }
 
@@ -241,10 +251,10 @@ func (e *Editor) executeQuitCommand() {
 func (e *Editor) executeReloadCommand() {
 	if e.currentFilename != "" {
 		if err := e.loadFile(e.currentFilename); err != nil {
-			e.showStatus("Error loading file: " + err.Error())
+			e.showStatus(fmt.Sprintf("%s: %v", errorReadingFile, err))
 		}
 	} else {
-		e.showStatus("No filename specified for :e command")
+		e.showStatus(errorNoFilename + " for :e command")
 	}
 }
 
@@ -254,9 +264,11 @@ func (e *Editor) executeReloadCommand() {
 func (e *Editor) executeSaveAsCommand(filename string) {
 	filename = strings.TrimSpace(filename)
 	if filename != "" {
-		e.saveFile(filename)
+		if err := e.saveFile(filename); err != nil {
+			e.showStatus(fmt.Sprintf("%s: %v", errorWritingFile, err))
+		}
 	} else {
-		e.showStatus("No filename specified for :w command")
+		e.showStatus(errorNoFilename + " for :w command")
 	}
 }
 
@@ -264,9 +276,11 @@ func (e *Editor) executeSaveAsCommand(filename string) {
 // If no file is loaded, it displays an error message.
 func (e *Editor) executeSaveCommand() {
 	if e.currentFilename != "" {
-		e.saveFile(e.currentFilename)
+		if err := e.saveFile(e.currentFilename); err != nil {
+			e.showStatus(fmt.Sprintf("%s: %v", errorWritingFile, err))
+		}
 	} else {
-		e.showStatus("No filename specified for :w command")
+		e.showStatus(errorNoFilename + " for :w command")
 	}
 }
 
@@ -330,74 +344,56 @@ func (e *Editor) handleCommandInput() {
 	}
 }
 
+// executeCommand parses and executes editor commands.
+// It uses a more robust parsing approach with proper bounds checking.
+// Parameters:
+// - command: The command string to execute.
+// Returns:
+// - error: An error if the command is invalid or execution fails.
 func (e *Editor) executeCommand(command string) error {
-	i := 0
-	errUnknownCommand := errors.New("Unknown command: " + command)
-	if command[i] == ':' {
-		i++ // Skip the leading ':'
-		switch command[i] {
-		case 'e':
-			if i == len(command)-1 {
-				e.executeReloadCommand()
-				return nil
-			}
-			i++
-			switch command[i] {
-			case ' ':
-				e.executeEditCommand(command[i:])
-				return nil
-			default:
-				return errUnknownCommand
-			}
-		case 'w':
-			if i == len(command)-1 {
-				e.executeSaveCommand()
-				return nil
-			}
-			i++
-			switch command[i] {
-			case ' ':
-				e.executeSaveAsCommand(command[i:])
-				return nil
-			default:
-				return errUnknownCommand
-			}
-		case 'q':
-			if i == len(command)-1 {
-				e.executeQuitCommand()
-				return nil
-			} else {
-				return errUnknownCommand
-			}
-		case 'l':
-			if i == len(command)-1 {
-				return errUnknownCommand
-			}
-			i++
-			switch command[i] {
-			case 'n':
-				e.toggleShowLineNumbers()
-				return nil
-			default:
-				return errUnknownCommand
-			}
-		case 'h':
-			if i == len(command)-1 {
-				return errUnknownCommand
-			}
-			i++
-			switch command[i] {
-			case 'l':
-				e.toggleHighlightCurrentLine()
-				return nil
-			default:
-				return errUnknownCommand
-			}
-		default:
-			return errUnknownCommand
-		}
+	if len(command) < minCommandLength {
+		return errors.New(errorUnknownCommand + ": " + command)
 	}
-	return errUnknownCommand
+
+	if command[0] != ':' {
+		return errors.New(errorUnknownCommand + ": " + command)
+	}
+
+	// Parse command after the ':'
+	cmd := command[1:]
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return errors.New(errorUnknownCommand + ": " + command)
+	}
+
+	switch parts[0] {
+	case "e":
+		if len(parts) == 1 {
+			e.executeReloadCommand()
+		} else {
+			e.executeEditCommand(command)
+		}
+	case "w":
+		if len(parts) == 1 {
+			e.executeSaveCommand()
+		} else {
+			e.executeSaveAsCommand(strings.Join(parts[1:], " "))
+		}
+	case "q":
+		if len(parts) == 1 {
+			e.executeQuitCommand()
+		} else {
+			return errors.New(errorUnknownCommand + ": " + command)
+		}
+	case "ln":
+		e.toggleShowLineNumbers()
+	case "hl":
+		e.toggleHighlightCurrentLine()
+	default:
+		return errors.New(errorUnknownCommand + ": " + command)
+	}
+
+	return nil
 }
 
 // handleCommandMode processes key events in command mode.
@@ -440,9 +436,9 @@ func (e *Editor) handleDelete() {
 func (e *Editor) handleEnter() {
 	if e.cursorY < len(e.lines) {
 		line := e.lines[e.cursorY]
-		newLine := line[e.cursorX:]
+		newLine := slices.Clone(line[e.cursorX:])
 		e.lines[e.cursorY] = line[:e.cursorX]
-		e.lines = append(e.lines[:e.cursorY+1], append([][]rune{newLine}, e.lines[e.cursorY+1:]...)...)
+		e.lines = slices.Insert(e.lines, e.cursorY+1, newLine)
 		e.cursorY++
 		e.cursorX = 0
 		e.dirty = true // Mark as dirty to redraw
@@ -515,8 +511,7 @@ func (e *Editor) handleInsertRune(r rune) {
 	if e.cursorX > len(line) {
 		e.cursorX = len(line)
 	}
-	newLine := append(line[:e.cursorX], append([]rune{r}, line[e.cursorX:]...)...)
-	e.lines[e.cursorY] = newLine
+	e.lines[e.cursorY] = slices.Insert(line, e.cursorX, r)
 	e.cursorX++
 	e.dirty = true // Mark as dirty
 }
@@ -527,7 +522,8 @@ func (e *Editor) handleInsertRune(r rune) {
 // Returns: The recalculated cursor offset.
 func (e *Editor) calculateCursorOffsetX(line []rune) int {
 	offset := 0
-	for _, r := range line[:e.cursorX] {
+	maxX := min(e.cursorX, len(line))
+	for _, r := range line[:maxX] {
 		if r == '\t' {
 			offset += e.spacesPerTab - 1
 		}
@@ -681,10 +677,10 @@ func (e *Editor) loadFile(filename string) error {
 		if col >= 0 && col < len(e.lines[line]) {
 			e.cursorX = col
 		}
-	}
-	// Update highlighter
+	} // Update highlighter
 	e.highlighter.SetFileExtension(filepath.Ext(filename))
 	e.currentFilename = filename
+	e.dirty = true // Mark as dirty to trigger redraw
 
 	return nil
 }
@@ -693,27 +689,29 @@ func (e *Editor) loadFile(filename string) error {
 // It writes each line of the buffer to the specified file.
 // Parameters:
 // - filename: The path to the file where the buffer will be saved.
-func (e *Editor) saveFile(filename string) {
+// Returns:
+// - error: An error if the file cannot be opened or written to.
+func (e *Editor) saveFile(filename string) error {
 	filename = filepath.Clean(filename)
 
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
 	if err != nil {
-		e.showStatus("Error opening file: " + err.Error())
-		return
+		return fmt.Errorf("error opening file '%s': %w", filename, err)
 	}
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
 	for _, line := range e.lines {
-		_, err := writer.WriteString(string(line) + "\n")
-		if err != nil {
-			e.showStatus("Error writing to file: " + err.Error())
-			return
+		if _, err := writer.WriteString(string(line) + "\n"); err != nil {
+			return fmt.Errorf("error writing to file '%s': %w", filename, err)
 		}
 	}
-	writer.Flush()
+
 	e.currentFilename = filename
 	e.showStatus("File saved: " + filename)
+	return nil
 }
 
 // showStatus updates the status message displayed in the editor.

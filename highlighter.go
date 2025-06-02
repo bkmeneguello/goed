@@ -6,7 +6,7 @@ import (
 
 // Highlighter defines the interface for syntax highlighters.
 type Highlighter interface {
-	GetHighlightMap(src string) map[int]tcell.Style
+	GetHighlightMap(src []rune) map[int]tcell.Style
 }
 
 // SyntaxHighlighter manages different highlighters based on file extensions.
@@ -36,7 +36,7 @@ func (sh *SyntaxHighlighter) SetFileExtension(extension string) {
 }
 
 // GetHighlightMap delegates to the current highlighter or returns an empty style map.
-func (sh *SyntaxHighlighter) GetHighlightMap(src string) map[int]tcell.Style {
+func (sh *SyntaxHighlighter) GetHighlightMap(src []rune) map[int]tcell.Style {
 	if sh.current == nil {
 		return map[int]tcell.Style{} // Return an empty map if no highlighter is set
 	}
