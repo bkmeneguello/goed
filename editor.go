@@ -251,8 +251,8 @@ func (e *Editor) executeReloadCommand() {
 // executeSaveAsCommand processes the :w command to save the buffer to a new file.
 // Parameters:
 // - command: The full command string, including the filename.
-func (e *Editor) executeSaveAsCommand(command string) {
-	filename := strings.Trim(strings.TrimSpace(command[2:]), "\"")
+func (e *Editor) executeSaveAsCommand(filename string) {
+	filename = strings.TrimSpace(filename)
 	if filename != "" {
 		e.saveFile(filename)
 	} else {
