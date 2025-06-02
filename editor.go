@@ -69,6 +69,7 @@ type Editor struct {
 // Returns: A pointer to the newly created Editor instance.
 func NewEditor(screen tcell.Screen, style tcell.Style) *Editor {
 	highlighter := NewSyntaxHighlighter(style)
+	tcell.StyleDefault = style // Set tcell.StyleDefault to e.style
 	return &Editor{
 		lines:                [][]rune{{}}, // Start with one empty line
 		cursorX:              0,
@@ -538,8 +539,10 @@ func (e *Editor) handleMoveDown() {
 		eol := e.cursorX == len(e.lines[e.cursorY])
 		e.cursorY++
 		nextLine := e.lines[e.cursorY]
-		if e.cursorX > 0 && (eol || e.cursorX > len(nextLine)) {
-			e.cursorX = len(nextLine)
+		if e.cursorX > 0 {
+			if eol || e.cursorX > len(nextLine) {
+				e.cursorX = len(nextLine)
+			}
 		}
 	}
 	e.dirty = true // Mark as dirty to trigger a redraw
@@ -591,8 +594,10 @@ func (e *Editor) handleMoveUp() {
 		eol := e.cursorX == len(e.lines[e.cursorY])
 		e.cursorY--
 		prevLine := e.lines[e.cursorY]
-		if e.cursorX > 0 && (eol || e.cursorX > len(prevLine)) {
-			e.cursorX = len(prevLine)
+		if e.cursorX > 0 {
+			if eol || e.cursorX > len(prevLine) {
+				e.cursorX = len(prevLine)
+			}
 		}
 	}
 	e.dirty = true // Mark as dirty to trigger a redraw
