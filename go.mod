@@ -1,4 +1,4 @@
-module github.com/bkmeneguello/goide
+module github.com/bkmeneguello/goed
 
 go 1.23.3
 
