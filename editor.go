@@ -532,16 +532,52 @@ func (e *Editor) calculateCursorOffsetX(line []rune) int {
 	return offset
 }
 
+// bufferToVirtualX converts the buffer X coordinate to the virtual X coordinate.
+// It accounts for tabs by expanding them to the configured number of spaces.
+func (e *Editor) bufferToVirtualX(line []rune, bufferX int) int {
+	virtualX := 0
+	for i := 0; i < bufferX && i < len(line); i++ {
+		if line[i] == '\t' {
+			virtualX += e.spacesPerTab
+		} else {
+			virtualX++
+		}
+	}
+	return virtualX
+}
+
+// virtualToBufferX converts the virtual X coordinate to the buffer X coordinate.
+// It accounts for tabs by collapsing them to a single character.
+func (e *Editor) virtualToBufferX(line []rune, virtualX int) int {
+	bufferX := 0
+	currentVirtualX := 0
+	for bufferX < len(line) && currentVirtualX < virtualX {
+		if line[bufferX] == '\t' {
+			currentVirtualX += e.spacesPerTab
+		} else {
+			currentVirtualX++
+		}
+		if currentVirtualX > virtualX {
+			break
+		}
+		bufferX++
+	}
+	return bufferX
+}
+
 // handleMoveDown moves the cursor down by one line.
 // It adjusts the cursor position to the end of the line if necessary.
 func (e *Editor) handleMoveDown() {
 	if e.cursorY < len(e.lines)-1 {
 		eol := e.cursorX == len(e.lines[e.cursorY])
+		virtualX := e.bufferToVirtualX(e.lines[e.cursorY], e.cursorX)
 		e.cursorY++
 		nextLine := e.lines[e.cursorY]
 		if e.cursorX > 0 {
 			if eol || e.cursorX > len(nextLine) {
 				e.cursorX = len(nextLine)
+			} else {
+				e.cursorX = e.virtualToBufferX(nextLine, virtualX)
 			}
 		}
 	}
@@ -592,11 +628,14 @@ func (e *Editor) handleMoveToStart() {
 func (e *Editor) handleMoveUp() {
 	if e.cursorY > 0 {
 		eol := e.cursorX == len(e.lines[e.cursorY])
+		virtualX := e.bufferToVirtualX(e.lines[e.cursorY], e.cursorX)
 		e.cursorY--
 		prevLine := e.lines[e.cursorY]
 		if e.cursorX > 0 {
 			if eol || e.cursorX > len(prevLine) {
 				e.cursorX = len(prevLine)
+			} else {
+				e.cursorX = e.virtualToBufferX(prevLine, virtualX)
 			}
 		}
 	}
