@@ -646,6 +646,8 @@ func (e *Editor) handleMoveUp() {
 // It adjusts the cursor position to stay within the visible area.
 func (e *Editor) handlePageDown() {
 	if e.offsetY < len(e.lines)-1 {
+		eol := e.cursorX == len(e.lines[e.cursorY])
+		virtualX := e.bufferToVirtualX(e.lines[e.cursorY], e.cursorX)
 		e.offsetY += e.h - 1
 		if e.offsetY > len(e.lines)-1 {
 			e.offsetY = len(e.lines) - 1
@@ -655,8 +657,12 @@ func (e *Editor) handlePageDown() {
 		if e.cursorY >= len(e.lines) {
 			e.cursorY = len(e.lines) - 1
 		}
-		if e.cursorX > len(e.lines[e.cursorY]) {
-			e.cursorX = len(e.lines[e.cursorY])
+		if e.cursorX > 0 {
+			if eol || e.cursorX > len(e.lines[e.cursorY]) {
+				e.cursorX = len(e.lines[e.cursorY])
+			} else {
+				e.cursorX = e.virtualToBufferX(e.lines[e.cursorY], virtualX)
+			}
 		}
 		e.dirty = true // Mark as dirty to redraw
 	}
@@ -666,13 +672,19 @@ func (e *Editor) handlePageDown() {
 // It adjusts the cursor position to stay within the visible area.
 func (e *Editor) handlePageUp() {
 	if e.offsetY > 0 {
+		eol := e.cursorX == len(e.lines[e.cursorY])
+		virtualX := e.bufferToVirtualX(e.lines[e.cursorY], e.cursorX)
 		e.offsetY -= e.h - 1
 		if e.offsetY < 0 {
 			e.offsetY = 0
 		}
 		e.cursorY = e.offsetY
-		if e.cursorX > len(e.lines[e.cursorY]) {
-			e.cursorX = len(e.lines[e.cursorY])
+		if e.cursorX > 0 {
+			if eol || e.cursorX > len(e.lines[e.cursorY]) {
+				e.cursorX = len(e.lines[e.cursorY])
+			} else {
+				e.cursorX = e.virtualToBufferX(e.lines[e.cursorY], virtualX)
+			}
 		}
 		e.dirty = true // Mark as dirty to trigger a redraw
 	}
